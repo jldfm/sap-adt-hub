@@ -5,7 +5,7 @@ const https = require("https");
 const { spawn, exec, execFile } = require("child_process");
 const readline = require("readline");
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 function cfg(name) {
   const v = process.env[name];
@@ -135,6 +135,26 @@ function pkgVersion(dir) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version; } catch { return null; }
 }
 
+let nodeCache = null;
+
+function nodeRuntime() {
+  if (nodeCache) return nodeCache;
+  if (!process.versions.electron) return (nodeCache = { exe: process.execPath, env: {} });
+  const override = cfg("ADT_NODE_PATH");
+  const candidates = [override];
+  for (const dir of String(process.env.PATH || process.env.Path || "").split(path.delimiter)) if (dir) candidates.push(path.join(dir.replace(/"/g, ""), "node.exe"));
+  candidates.push(
+    path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"),
+    path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "nodejs", "node.exe"),
+    path.join(process.env.LOCALAPPDATA || "", "Programs", "nodejs", "node.exe"),
+    process.env.NVM_SYMLINK ? path.join(process.env.NVM_SYMLINK, "node.exe") : "",
+  );
+  for (const c of candidates) {
+    try { if (c && fs.statSync(c).isFile()) return (nodeCache = { exe: c, env: {} }); } catch {}
+  }
+  return (nodeCache = { exe: process.execPath, env: { ELECTRON_RUN_AS_NODE: "1" } });
+}
+
 function arc1Install() {
   const managed = path.join(ARC1_DIR, "node_modules", "arc-1");
   const mv = pkgVersion(managed);
@@ -215,17 +235,32 @@ class Arc1Process {
     const inst = arc1Install();
     if (!inst) throw new Error("ARC-1 is not installed and could not be installed automatically. Install Node.js LTS (https://nodejs.org) and try again.");
     this.version = inst.version;
+    const node = nodeRuntime();
     const env = {};
-    for (const [k, v] of Object.entries(process.env)) if (!/^(SAP_|ADT_)/.test(k)) env[k] = v;
-    Object.assign(env, this.env);
-    this.proc = spawn(process.execPath, [path.join(inst.dir, "bin", "arc1.js"), "--system-label", this.label], { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    for (const [k, v] of Object.entries(process.env)) if (!/^(SAP_|ADT_|ELECTRON_)/.test(k)) env[k] = v;
+    Object.assign(env, node.env, this.env);
+    const entry = path.join(inst.dir, "bin", "arc1.js");
+    log(`starting ARC-1 ${inst.version} (${inst.kind}) for ${this.label} with ${node.exe}${node.env.ELECTRON_RUN_AS_NODE ? " (Electron as Node)" : ""}`);
+    this.stderrTail = [];
+    this.proc = spawn(node.exe, [entry, "--system-label", this.label], { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.proc.on("exit", (code) => {
       this.dead = true;
-      for (const [, p] of this.pending) p.reject(new Error(`ARC-1 for ${this.label} stopped (exit ${code}).`));
+      log(`ARC-1 for ${this.label} exited (${code})`);
+      const tail = this.stderrTail.slice(-5).join(" | ");
+      for (const [, p] of this.pending) p.reject(new Error(`ARC-1 for ${this.label} stopped (exit ${code}).${tail ? ` Last output: ${tail}` : ""}`));
       this.pending.clear();
     });
-    this.proc.on("error", (e) => log(this.label, "spawn error", e.message));
-    readline.createInterface({ input: this.proc.stderr }).on("line", (l) => { if (/ERROR|WARN/.test(l)) log(this.label, l.slice(0, 300)); });
+    this.proc.on("error", (e) => {
+      log(this.label, "spawn error", e.message);
+      this.dead = true;
+      for (const [, p] of this.pending) p.reject(new Error(`ARC-1 for ${this.label} could not start with ${node.exe}: ${e.message}`));
+      this.pending.clear();
+    });
+    readline.createInterface({ input: this.proc.stderr }).on("line", (l) => {
+      this.stderrTail.push(l.slice(0, 300));
+      if (this.stderrTail.length > 20) this.stderrTail.shift();
+      if (/ERROR|WARN/.test(l)) log(this.label, l.slice(0, 300));
+    });
     readline.createInterface({ input: this.proc.stdout }).on("line", (l) => {
       let m;
       try { m = JSON.parse(l); } catch { return; }
@@ -236,7 +271,16 @@ class Arc1Process {
         else p.resolve(m.result);
       }
     });
-    const init = await this.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "sap-adt-hub", version: VERSION } });
+    let timer;
+    const init = await Promise.race([
+      this.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "sap-adt-hub", version: VERSION } }),
+      new Promise((_, reject) => { timer = setTimeout(() => {
+        const tail = this.stderrTail.slice(-5).join(" | ");
+        this.stop();
+        reject(new Error(`ARC-1 for ${this.label} did not start within 60 s (runtime ${node.exe}).${tail ? ` Last output: ${tail}` : ""}`));
+      }, 60000); }),
+    ]).finally(() => clearTimeout(timer));
+    log(`ARC-1 for ${this.label} ready`);
     this.instructions = init.instructions || "";
     this.notify("notifications/initialized");
     const list = await this.rpc("tools/list", {});
@@ -382,7 +426,8 @@ const HUB_TOOLS = [
         running: !!(children.get(c.id) && !children.get(c.id).dead),
         default: c.id === DEFAULT_SYSTEM,
       }));
-      return text(JSON.stringify({ arc1: inst ? `${inst.version} (${inst.kind})` : null, configDir: CONFIG_DIR, connections: rows }, null, 1));
+      const node = nodeRuntime();
+      return text(JSON.stringify({ arc1: inst ? `${inst.version} (${inst.kind})` : null, nodeRuntime: node.exe + (node.env.ELECTRON_RUN_AS_NODE ? " (Electron as Node)" : ""), configDir: CONFIG_DIR, connections: rows }, null, 1));
     },
   },
   {
@@ -560,7 +605,10 @@ async function handle(msg) {
   }
   if (method === "tools/call") {
     let result;
+    const t0 = Date.now();
+    log(`call ${params.name}${params.arguments && params.arguments.system ? ` system=${params.arguments.system}` : ""}`);
     try { result = await callTool(params.name, params.arguments); } catch (e) { result = text(String(e.message || e), true); }
+    log(`done ${params.name} in ${Date.now() - t0} ms${result.isError ? ` ERROR: ${String(result.content[0].text).slice(0, 200)}` : ""}`);
     return send({ jsonrpc: "2.0", id, result });
   }
   if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });

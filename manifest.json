@@ -2,18 +2,29 @@
   "manifest_version": "0.2",
   "name": "sap-adt-hub",
   "display_name": "SAP ADT Hub (ARC-1)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Connect Claude to several SAP ABAP systems at once through ADT, powered by ARC-1. Add systems in the chat or in the settings.",
   "long_description": "SAP ADT Hub runs one ARC-1 (SAP ADT MCP server) per SAP connection, so any Claude chat can read and develop ABAP (classic and RAP) on several systems side by side: source code, DDIC, CDS, transports, ATC, unit tests, dumps and more.\n\n- Add connections by asking Claude (the password is typed in a Windows dialog, never in the chat) or in these settings.\n- Every time a connection starts, the hub checks npm for a newer ARC-1, installs it and tells Claude what is new.\n- Connections are read-only until you allow writes, SQL or data preview for that connection.\n- Compatible with the ARC-1 multi-system helper folder (~/.arc1).\n\nRequires Node.js LTS with npm (https://nodejs.org).",
-  "author": { "name": "jldfm" },
+  "author": {
+    "name": "jldfm"
+  },
   "license": "MIT",
-  "keywords": ["sap", "abap", "adt", "arc-1", "rap", "mcp"],
+  "keywords": [
+    "sap",
+    "abap",
+    "adt",
+    "arc-1",
+    "rap",
+    "mcp"
+  ],
   "server": {
     "type": "node",
     "entry_point": "server/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/index.js"],
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
       "env": {
         "ADT_CONFIG_DIR": "${user_config.config_dir}",
         "ADT_DEFAULT_SYSTEM": "${user_config.default_system}",
@@ -28,26 +39,86 @@
     }
   },
   "tools": [
-    { "name": "adt_connections", "description": "List SAP connections" },
-    { "name": "adt_add_connection", "description": "Add an SAP connection (password via Windows dialog)" },
-    { "name": "adt_set_password", "description": "Enter or change a connection password" },
-    { "name": "adt_test_connection", "description": "Check for ARC-1 updates and test a connection" },
-    { "name": "adt_set_permissions", "description": "Allow writes, SQL or data preview per connection" },
-    { "name": "adt_remove_connection", "description": "Remove a connection" },
-    { "name": "adt_check_updates", "description": "Check and install a newer ARC-1" },
-    { "name": "adt_guide", "description": "How to use the hub" },
-    { "name": "SAPRead", "description": "ARC-1: read ABAP source, DDIC, CDS and more (per system)" },
-    { "name": "SAPSearch", "description": "ARC-1: search objects (per system)" },
-    { "name": "SAPWrite", "description": "ARC-1: create/change objects (when allowed)" },
-    { "name": "SAPActivate", "description": "ARC-1: activate objects (when allowed)" },
-    { "name": "SAPNavigate", "description": "ARC-1: where-used, definitions, relations" },
-    { "name": "SAPQuery", "description": "ARC-1: free SQL (when allowed)" },
-    { "name": "SAPLint", "description": "ARC-1: lint and pretty print" },
-    { "name": "SAPDiagnose", "description": "ARC-1: syntax, ATC, unit tests, dumps, traces" },
-    { "name": "SAPContext", "description": "ARC-1: object context and dependencies" },
-    { "name": "SAPManage", "description": "ARC-1: packages and object management" },
-    { "name": "SAPTransport", "description": "ARC-1: transports" },
-    { "name": "SAPGit", "description": "ARC-1: abapGit / gCTS" }
+    {
+      "name": "adt_connections",
+      "description": "List SAP connections"
+    },
+    {
+      "name": "adt_add_connection",
+      "description": "Add an SAP connection (password via Windows dialog)"
+    },
+    {
+      "name": "adt_set_password",
+      "description": "Enter or change a connection password"
+    },
+    {
+      "name": "adt_test_connection",
+      "description": "Check for ARC-1 updates and test a connection"
+    },
+    {
+      "name": "adt_set_permissions",
+      "description": "Allow writes, SQL or data preview per connection"
+    },
+    {
+      "name": "adt_remove_connection",
+      "description": "Remove a connection"
+    },
+    {
+      "name": "adt_check_updates",
+      "description": "Check and install a newer ARC-1"
+    },
+    {
+      "name": "adt_guide",
+      "description": "How to use the hub"
+    },
+    {
+      "name": "SAPRead",
+      "description": "ARC-1: read ABAP source, DDIC, CDS and more (per system)"
+    },
+    {
+      "name": "SAPSearch",
+      "description": "ARC-1: search objects (per system)"
+    },
+    {
+      "name": "SAPWrite",
+      "description": "ARC-1: create/change objects (when allowed)"
+    },
+    {
+      "name": "SAPActivate",
+      "description": "ARC-1: activate objects (when allowed)"
+    },
+    {
+      "name": "SAPNavigate",
+      "description": "ARC-1: where-used, definitions, relations"
+    },
+    {
+      "name": "SAPQuery",
+      "description": "ARC-1: free SQL (when allowed)"
+    },
+    {
+      "name": "SAPLint",
+      "description": "ARC-1: lint and pretty print"
+    },
+    {
+      "name": "SAPDiagnose",
+      "description": "ARC-1: syntax, ATC, unit tests, dumps, traces"
+    },
+    {
+      "name": "SAPContext",
+      "description": "ARC-1: object context and dependencies"
+    },
+    {
+      "name": "SAPManage",
+      "description": "ARC-1: packages and object management"
+    },
+    {
+      "name": "SAPTransport",
+      "description": "ARC-1: transports"
+    },
+    {
+      "name": "SAPGit",
+      "description": "ARC-1: abapGit / gCTS"
+    }
   ],
   "user_config": {
     "config_dir": {
@@ -82,9 +153,25 @@
       "description": "e.g. https://host:44300 (RISE: https://host).",
       "required": false
     },
-    "conn_client": { "type": "string", "title": "Settings connection: client", "description": "SAP client, e.g. 100.", "required": false },
-    "conn_user": { "type": "string", "title": "Settings connection: user", "description": "SAP user name.", "required": false },
-    "conn_password": { "type": "string", "title": "Settings connection: password", "description": "Stored in the system keychain by Claude Desktop.", "sensitive": true, "required": false },
+    "conn_client": {
+      "type": "string",
+      "title": "Settings connection: client",
+      "description": "SAP client, e.g. 100.",
+      "required": false
+    },
+    "conn_user": {
+      "type": "string",
+      "title": "Settings connection: user",
+      "description": "SAP user name.",
+      "required": false
+    },
+    "conn_password": {
+      "type": "string",
+      "title": "Settings connection: password",
+      "description": "Stored in the system keychain by Claude Desktop.",
+      "sensitive": true,
+      "required": false
+    },
     "conn_insecure": {
       "type": "boolean",
       "title": "Settings connection: accept self-signed certificates",
@@ -94,7 +181,11 @@
     }
   },
   "compatibility": {
-    "platforms": ["win32"],
-    "runtimes": { "node": ">=18.0.0" }
+    "platforms": [
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
   }
 }
