@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "sap-adt-hub",
   "display_name": "SAP ADT Hub (ARC-1)",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Connect Claude to several SAP ABAP systems at once through ADT, powered by ARC-1. Add systems in the chat or in the settings.",
   "long_description": "SAP ADT Hub runs one ARC-1 (SAP ADT MCP server) per SAP connection, so any Claude chat can read and develop ABAP (classic and RAP) on several systems side by side: source code, DDIC, CDS, transports, ATC, unit tests, dumps and more.\n\n- Add connections by asking Claude (the password is typed in a Windows dialog, never in the chat) or in these settings.\n- Every time a connection starts, the hub checks npm for a newer ARC-1, installs it and tells Claude what is new.\n- Connections are read-only until you allow writes, SQL or data preview for that connection.\n- Create and release Transports of Copies from a task or request (asks before installing its helper class in $TMP and before releasing).\n- Compatible with the ARC-1 multi-system helper folder (~/.arc1).\n\nRequires Node.js LTS with npm (https://nodejs.org).",
   "author": {

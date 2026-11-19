@@ -169,42 +169,74 @@ module.exports = function createTocTool(ctx) {
     return r.body.trim();
   }
 
+  const TRKORR_RE = /(CONSTANTS\s+c_trkorr\s+TYPE\s+trkorr\s+VALUE\s+)'([^']*)'/i;
+  const TARGET_RE = /(CONSTANTS\s+c_target\s+TYPE\s+trexreqhd-target\s+VALUE\s+)'([^']*)'/i;
+
   function setConstants(src, trkorr, target) {
-    let hits = 0;
-    let out = src.replace(/(CONSTANTS\s+c_trkorr\s+TYPE\s+trkorr\s+VALUE\s+)'[^']*'/i, (_, p) => { hits++; return `${p}'${trkorr}'`; });
-    if (target) out = out.replace(/(CONSTANTS\s+c_target\s+TYPE\s+trexreqhd-target\s+VALUE\s+)'[^']*'/i, (_, p) => { hits++; return `${p}'${target}'`; });
-    if (hits < (target ? 2 : 1)) throw new Error("Could not find the C_TRKORR/C_TARGET constants in the runner source.");
+    if (!TRKORR_RE.test(src) || (target && !TARGET_RE.test(src))) throw new Error("Could not find the C_TRKORR/C_TARGET constants in the runner source.");
+    let out = src.replace(TRKORR_RE, (_, p) => `${p}'${trkorr}'`);
+    if (target) out = out.replace(TARGET_RE, (_, p) => `${p}'${target}'`);
     return out;
   }
 
-  function stripReadHeader(txt) {
-    const j = parseJson(txt);
-    if (j && typeof j.source === "string") return j.source;
-    return txt;
+  function armedWith(src) {
+    const m = TRKORR_RE.exec(src);
+    return m ? m[2].trim() : "";
   }
 
-  async function runnerSource(child, useClassrun) {
-    const args = useClassrun ? { type: "CLAS", name: RUNNER } : { type: "CLAS", name: LOGIC, include: "testclasses" };
-    return { args, source: stripReadHeader(await call(child, "SAPRead", args)) };
+  function cleanSource(src) {
+    return String(src).split(/\r?\n/).filter((l) => !/^=== .+ ===\s*$/.test(l)).join("\r\n").replace(/^(\r\n)+/, "");
   }
 
-  async function writeRunner(child, useClassrun, args, source) {
+  function runnerArgs(useClassrun) {
+    return useClassrun ? { type: "CLAS", name: RUNNER } : { type: "CLAS", name: LOGIC, include: "testclasses" };
+  }
+
+  async function readRunner(child, useClassrun) {
+    const args = runnerArgs(useClassrun);
+    const out = await call(child, "SAPRead", { ...args, format: "editable" });
+    const j = parseJson(out);
+    if (j && typeof j.source === "string") return { args, source: cleanSource(j.source), hash: j.sourceHash || null };
+    return { args, source: cleanSource(out), hash: null };
+  }
+
+  async function writeRunner(child, useClassrun, args, source, hash) {
     const name = useClassrun ? RUNNER : LOGIC;
-    await call(child, "SAPWrite", { action: "update", ...args, source, lintBeforeWrite: false });
+    const write = { action: "update", ...args, source: cleanSource(source), lintBeforeWrite: false };
+    if (hash) write.expectedSourceHash = hash;
+    await call(child, "SAPWrite", write);
     await call(child, "SAPActivate", { type: "CLAS", name });
+  }
+
+  async function resetRunner(child, useClassrun) {
+    const r = await readRunner(child, useClassrun);
+    if (!armedWith(r.source)) return false;
+    await writeRunner(child, useClassrun, r.args, setConstants(r.source, "", null), r.hash);
+    return true;
+  }
+
+  async function clientRiskSetup(child) {
+    const rows = await sql(child, "SELECT deny_execution, max_risk_level FROM taunit_clt_setup");
+    if (!rows.length) return { blocked: false, text: "no client-specific ABAP Unit setting (system default applies)" };
+    const deny = String(rows[0].DENY_EXECUTION || "").trim();
+    const level = parseInt(String(rows[0].MAX_RISK_LEVEL || "").trim(), 10);
+    if (deny) return { blocked: true, text: "ABAP Unit execution is denied for this client (SAUNIT_CLIENT_SETUP)" };
+    if (level && level < 22) return { blocked: true, text: `client allows only risk level ${level === 11 ? "Harmless" : level} (SAUNIT_CLIENT_SETUP); Dangerous is needed` };
+    return { blocked: false, text: `client max risk level ${level === 33 ? "Critical" : level === 22 ? "Dangerous" : level || "default"}` };
   }
 
   async function installed(child) {
     const rows = await sql(child, `SELECT obj_name, devclass FROM tadir WHERE pgmid = 'R3TR' AND object = 'CLAS' AND obj_name IN (${lit(LOGIC)}, ${lit(RUNNER)})`);
     const has = Object.fromEntries(rows.map((r) => [String(r.OBJ_NAME).trim(), String(r.DEVCLASS).trim()]));
     let runnerInclude = false;
+    let testInclude = "";
     if (has[LOGIC]) {
       try {
-        const inc = stripReadHeader(await call(child, "SAPRead", { type: "CLAS", name: LOGIC, include: "testclasses" }));
-        runnerInclude = /ltc_runner/i.test(inc) && /c_trkorr/i.test(inc);
+        testInclude = (await readRunner(child, false)).source;
+        runnerInclude = /ltc_runner/i.test(testInclude) && TRKORR_RE.test(testInclude);
       } catch { runnerInclude = false; }
     }
-    return { has, runnerInclude };
+    return { has, runnerInclude, testInclude };
   }
 
   async function basisRelease(child) {
@@ -244,6 +276,8 @@ module.exports = function createTocTool(ctx) {
       "3) It returns the plan (transport text, tasks, object count, suggested target from the user's ToC history). Ask the user to confirm the target and the release.",
       "4) Call with confirm=true (and target) to create and release the ToC; the result is verified in E070/E071.",
       "Releasing cannot be undone: never set confirm=true without the user's explicit yes in the chat.",
+      "Own write rule: this tool only writes ZCL_RELEASE_TOC / ZCL_RELEASE_TOC_RUN in $TMP, independent of the connection's allowed packages, and always resets the runner constant afterwards.",
+      "On SAP_BASIS 7.50 it runs the DANGEROUS ABAP Unit runner itself (do not use SAPDiagnose unittest for it, that only runs harmless tests).",
     ].join(" "),
     inputSchema: {
       type: "object",
@@ -254,6 +288,7 @@ module.exports = function createTocTool(ctx) {
         systemConfirmed: { type: "boolean", description: "The user confirmed this is the right development system." },
         install: { type: "boolean", description: "The user allowed creating the missing ZCL_RELEASE_TOC objects in $TMP." },
         confirm: { type: "boolean", description: "The user confirmed creating AND releasing the ToC with the shown plan and target." },
+        reset: { type: "boolean", description: "Only disarm the runner (set C_TRKORR back to '' and activate); creates no ToC. Use when the plan says the runner is still armed and the user wants it cleaned now." },
       },
       required: ["system", "transport"],
     },
@@ -280,13 +315,17 @@ module.exports = function createTocTool(ctx) {
       if (!useClassrun && !state.runnerInclude) missing.push(`${LOGIC} local test class ltc_runner (ABAP Unit runner)`);
 
       const notes = [];
+      if (a.reset) {
+        if (missing.length) return ctx.text(`Nothing to reset on ${conn.id}: ${missing.join(", ")} not installed.`);
+        const done = await resetRunner(child, useClassrun);
+        return ctx.text(done ? `Runner on ${conn.id} disarmed: C_TRKORR = '' and activated. No ToC was created.` : `Runner on ${conn.id} was not armed; nothing changed.`);
+      }
       if (missing.length) {
         if (!a.install) {
           return ctx.text(`NEEDS_INSTALL on ${where} (SAP_BASIS ${release}): missing ${missing.join(", ")}.\nAsk the user: "May I create these as local objects in $TMP on ${conn.id}? They are never transported." If yes, call again with systemConfirmed=true and install=true.`);
         }
-        if (state.has[LOGIC] && !useClassrun && !state.runnerInclude) {
-          const inc = stripReadHeader(await call(child, "SAPRead", { type: "CLAS", name: LOGIC, include: "testclasses" }).catch(() => ""));
-          if (/FOR\s+TESTING/i.test(inc)) throw new Error(`${LOGIC} already has other local test classes; not overwriting them. Add ltc_runner manually from github.com/${SRC_REPO}.`);
+        if (state.has[LOGIC] && !useClassrun && !state.runnerInclude && /FOR\s+TESTING/i.test(state.testInclude)) {
+          throw new Error(`${LOGIC} already has other local test classes; not overwriting them. Add ltc_runner manually from github.com/${SRC_REPO}.`);
         }
         const src = await sources();
         if (!state.has[LOGIC]) {
@@ -311,13 +350,23 @@ module.exports = function createTocTool(ctx) {
       let suggestion = [];
       if (!target) suggestion = await suggestTargets(child, String(conn.env.SAP_USER || "").toUpperCase());
       const chosen = target || (suggestion[0] && suggestion[0][0]) || "";
+      const risk = useClassrun ? null : await clientRiskSetup(child);
+      const current = await readRunner(child, useClassrun);
+      const leftover = armedWith(current.source);
       const plan = [
         `System: ${where}, SAP_BASIS ${release}, trigger: ${useClassrun ? "console app" : "ABAP Unit (risk level DANGEROUS)"}.`,
         `Source: ${trkorr} (${info.isTask ? `task of ${info.parent}` : `request with ${info.tasks.length} task(s)`}), owner ${String(info.header.AS4USER).trim()}, status ${String(info.header.TRSTATUS).trim()}.`,
         `ToC description: "TOC: ${info.text}".`,
         `Objects to copy: ${info.objects.length}${info.objects.length ? ` (e.g. ${info.objects.slice(0, 5).map((o) => `${String(o.OBJECT).trim()} ${String(o.OBJ_NAME).trim()}`).join(", ")})` : ""}.`,
         `Target: ${chosen || "UNKNOWN"}${!target && suggestion.length ? ` (suggested from the user's ToCs of the last 180 days: ${suggestion.map(([t, n]) => `${t} x${n}`).join(", ")})` : ""}.`,
+        ...(risk ? [`ABAP Unit: ${risk.text}.`] : []),
+        ...(leftover ? [`Note: the runner is still armed with ${leftover} from an earlier run; it is reset to '' after this run (or now, if this run fails).`] : []),
+        "Writes: only ZCL_RELEASE_TOC / ZCL_RELEASE_TOC_RUN in $TMP, with this tool's own write rule (independent of the connection's allowed packages).",
       ];
+
+      if (risk && risk.blocked) {
+        return ctx.text(`BLOCKED on ${where}: ${risk.text}. Ask the user (or Basis) to set the maximum risk level of client ${conn.env.SAP_CLIENT} to Dangerous in transaction SAUNIT_CLIENT_SETUP, then retry. Nothing was created.\n\nPLAN:\n- ${plan.join("\n- ")}`, true);
+      }
 
       if (!a.confirm || !target) {
         return ctx.text(`${notes.length ? notes.join(" ") + "\n\n" : ""}PLAN (nothing created yet):\n- ${plan.join("\n- ")}\n\nAsk the user to confirm the target and that the ToC may be created AND released (cannot be undone). Then call again with systemConfirmed=true, target="${chosen || "<target>"}", confirm=true.`);
@@ -325,23 +374,28 @@ module.exports = function createTocTool(ctx) {
       if (!info.objects.length) throw new Error(`${trkorr} contains no objects; nothing to copy.`);
 
       const password = await ctx.readPassword(conn);
-      const { args, source } = await runnerSource(child, useClassrun);
-      const armed = setConstants(source, trkorr, target);
-      const reset = setConstants(source, "", target);
       let output = "";
       let failure = null;
       ctx.log(`toc: arming runner on ${conn.id} for ${trkorr} -> ${target}`);
-      await writeRunner(child, useClassrun, args, armed);
       try {
+        const r = await readRunner(child, useClassrun);
+        await writeRunner(child, useClassrun, r.args, setConstants(r.source, trkorr, target), r.hash);
         output = useClassrun ? await runClassrun(conn, password) : await runUnit(conn, password);
-      } catch (e) { failure = e; }
-      try { await writeRunner(child, useClassrun, args, reset); } catch (e) { notes.push(`WARNING: could not reset C_TRKORR in the runner (${e.message}). Reset it before the next activation.`); }
-      if (failure) throw failure;
+      } catch (e) {
+        failure = e;
+      } finally {
+        try {
+          if (await resetRunner(child, useClassrun)) notes.push("Runner reset: C_TRKORR = '' and activated.");
+        } catch (e) {
+          notes.push(`WARNING: could not reset C_TRKORR (${e.message}). Ask the user to set it back to '' before running any test of ${useClassrun ? RUNNER : LOGIC}.`);
+        }
+      }
+      if (failure) return ctx.text([`ToC NOT created on ${conn.id}: ${failure.message}`, ...notes].join("\n"), true);
 
       const m = /TOC\s+([A-Z0-9]{3}K\d{6})\s+created from/i.exec(output);
       if (!m) {
         const hint = /risk level|upper limit|Risikostufe/i.test(output) ? "\nThe client does not allow DANGEROUS unit tests: in transaction SAUNIT_CLIENT_SETUP set the maximum risk level of this client to Dangerous, then retry." : "";
-        return ctx.text(`ToC run on ${conn.id} did not report a created ToC.${hint}\nOutput:\n${output.slice(0, 2000)}`, true);
+        return ctx.text([`ToC NOT created on ${conn.id}: the run did not report a created ToC.${hint}`, ...notes, `Output:\n${output.slice(0, 2000)}`].join("\n"), true);
       }
       const toc = m[1];
       const [h] = await sql(child, `SELECT trkorr, trfunction, trstatus, tarsystem FROM e070 WHERE trkorr = ${lit(toc)}`);

@@ -5,7 +5,7 @@ const https = require("https");
 const { spawn, exec, execFile } = require("child_process");
 const readline = require("readline");
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 
 function cfg(name) {
   const v = process.env[name];
