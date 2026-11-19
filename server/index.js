@@ -5,7 +5,7 @@ const https = require("https");
 const { spawn, exec, execFile } = require("child_process");
 const readline = require("readline");
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 function cfg(name) {
   const v = process.env[name];
@@ -407,6 +407,9 @@ Rules
 4. Connections are read-only by default. Writing, free SQL, data preview and transport writes are enabled per connection
    with adt_set_permissions, only after the user explicitly asked for it; prefer $TMP or a named package/transport.
 5. After writing ABAP: activate, run syntax/ATC checks, and report the results honestly.
+6. Transport of Copies: use adt_create_toc and follow the step it returns (confirm the development system with the
+   user, ask before installing ZCL_RELEASE_TOC in $TMP, show the plan, and only release after an explicit yes).
+   After finishing ABAP work on a development system, offer to create the ToC for the task.
 `.trim();
 };
 
@@ -554,6 +557,8 @@ const HUB_TOOLS = [
     handler: async () => text(GUIDE()),
   },
 ];
+
+HUB_TOOLS.push(require("./toc")({ readPassword, Arc1Process, resolveConnection, text, log, hubHome: HUB_HOME, version: VERSION }));
 
 async function testConnection(id) {
   const conn = loadConnections().get(id);

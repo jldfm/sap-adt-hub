@@ -40,7 +40,26 @@ Claude (Desktop / Code) ──MCP stdio──> server/index.js (hub, no dependen
 | `adt_set_permissions` | Allow writes (+ packages/transports), transport/Git writes, free SQL, data preview |
 | `adt_remove_connection` | Delete a connection and its password |
 | `adt_check_updates` | Check npm now and install a newer ARC-1 |
+| `adt_create_toc` | Create and release a Transport of Copies (see below) |
 | `adt_guide` | Usage rules for Claude |
+
+## Transport of Copies
+
+`adt_create_toc {system, transport, target}` uses [`ZCL_RELEASE_TOC`](https://github.com/rafafreitas87/sap_abap_toc_automation)
+and works in confirmed steps, each one returning the question Claude must ask:
+
+1. **System** - confirm that `system` is the development system the user is working on (`systemConfirmed=true`).
+2. **Objects** - if `ZCL_RELEASE_TOC` / its runner do not exist, ask whether to create them as local `$TMP` objects
+   (`install=true`); the ABAP source is downloaded from the pinned commit of that repository. If they exist, continue.
+3. **Plan** - transport text, tasks, objects and a target suggested from the user's ToC history.
+4. **Run** (`confirm=true`) - sets the runner constants, activates, triggers, resets the constants and verifies
+   `E070`/`E07T`/`E071`.
+
+Trigger by release: SAP_BASIS 7.50 uses the ABAP Unit runner with risk level DANGEROUS, called directly on the ADT
+`abapunit/testruns` endpoint (ARC-1 itself only runs harmless tests); the client must allow dangerous tests
+(`SAUNIT_CLIENT_SETUP`). SAP_BASIS 7.52+ uses the console app `ZCL_RELEASE_TOC_RUN` (`/sap/bc/adt/oo/classrun`).
+The tool uses its own ARC-1 instance limited to `$TMP` writes and read-only SQL, independent of the connection's
+permissions.
 
 ## Install
 
